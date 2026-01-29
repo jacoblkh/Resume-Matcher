@@ -67,11 +67,15 @@ def validate_api_key(api_key: str) -> None:
     """Validate API key format."""
     if not isinstance(api_key, str) or not re.match(API_KEY_PATTERN, api_key):
         raise HTTPException(status_code=400, detail="Invalid API key format.")
+    if len(api_key) < 20 or len(api_key) > 50:  # Length check
+        raise HTTPException(status_code=400, detail="API key must be between 20 and 50 characters.")
 
 def validate_provider(provider: str) -> None:
     """Validate provider name format."""
     if not isinstance(provider, str) or not re.match(PROVIDER_NAME_PATTERN, provider):
         raise HTTPException(status_code=400, detail="Invalid provider name format.")
+    if len(provider) < 3 or len(provider) > 30:  # Length check
+        raise HTTPException(status_code=400, detail="Provider name must be between 3 and 30 characters.")
 
 @router.get("/llm-api-key", response_model=LLMConfigResponse)
 async def get_llm_config_endpoint() -> LLMConfigResponse:

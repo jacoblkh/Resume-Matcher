@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Literal
 from cryptography.fernet import Fernet
@@ -68,6 +69,19 @@ def decrypt_api_keys(encrypted_api_keys: dict[str, str]) -> dict[str, str]:
     return {provider: fernet.decrypt(api_key.encode()).decode() for provider, api_key in encrypted_api_keys.items()}
 
 
+def validate_api_key(api_key: str) -> bool:
+    """Validate the API key format.
+
+    Args:
+        api_key: The API key to validate.
+
+    Returns:
+        True if valid, False otherwise.
+    """
+    # Example validation: length check and regex pattern
+    return bool(re.match(r'^[A-Za-z0-9_-]{32,}$', api_key))
+
+
 def get_api_keys_from_config() -> dict[str, str]:
     """Get API keys from config file.
 
@@ -85,6 +99,10 @@ def save_api_keys_to_config(api_keys: dict[str, str]) -> None:
     Args:
         api_keys: Dictionary with provider names as keys and API keys as values.
     """
+    for provider, api_key in api_keys.items():
+        if not validate_api_key(api_key):
+            raise ValueError(f"Invalid API key for provider {provider}.")
+    
     config = load_config_file()
     encrypted_keys = encrypt_api_keys(api_keys)
     config["api_keys"] = encrypted_keys
@@ -120,7 +138,7 @@ def _get_llm_api_key_with_fallback() -> str:
     """
     # First check environment variable
     env_key = os.environ.get("LLM_API_KEY", "")
-    if env_key:
+    if env_key and validate_api_key(env_key):
         return env_key
 
     # Fallback to config file based on provider
@@ -187,7 +205,7 @@ class Settings(BaseSettings):
 
         Priority: Environment/settings value > config.json > empty string
         """
-        if self.llm_api_key:
+        if self.llm_api_key and validate_api_key(self.llm_api_key):
             return self.llm_api_key
         return _get_llm_api_key_with_fallback()
 
