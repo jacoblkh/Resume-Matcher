@@ -69,15 +69,28 @@ def validate_api_key(api_key: str) -> None:
         raise HTTPException(status_code=400, detail="Invalid API key format.")
     if len(api_key) < 20 or len(api_key) > 50:  # Length check
         raise HTTPException(status_code=400, detail="API key must be between 20 and 50 characters.")
+    # Additional validation for common patterns in API keys
+    if " " in api_key or "\n" in api_key:
+        raise HTTPException(status_code=400, detail="API key must not contain whitespace characters.")
 
 def validate_provider(provider: str) -> None:
     """Validate provider name format."""
     if not isinstance(provider, str) or not re.match(PROVIDER_NAME_PATTERN, provider):
         raise HTTPException(status_code=400, detail="Invalid provider name format.")
+    # Additional validation for provider name
+    if len(provider) < 3 or len(provider) > 30:
+        raise HTTPException(status_code=400, detail="Provider name must be between 3 and 30 characters.")
 
 def sanitize_input(input_value: str) -> str:
     """Sanitize input to prevent injection attacks."""
-    return re.sub(r'[^\w\s-]', '', input_value).strip()
+    sanitized = re.sub(r'[^\w\s-]', '', input_value).strip()
+    # Additional sanitization to remove leading/trailing spaces
+    return sanitized
+
+def log_security_event(message: str) -> None:
+    """Log security events for monitoring."""
+    # Placeholder for logging mechanism
+    print(f"SECURITY EVENT: {message}")
 
 @router.get("/llm-api-key", response_model=LLMConfigResponse)
 async def get_llm_config_endpoint() -> LLMConfigResponse:
@@ -121,6 +134,7 @@ async def update_llm_config(request: LLMConfigRequest) -> LLMConfigResponse:
 
     health = await check_llm_health(test_config)
     if not health["healthy"]:
+        log_security_event("Invalid LLM configuration attempted.")
         raise HTTPException(
             status_code=400,
             detail="Invalid LLM configuration",
@@ -341,6 +355,7 @@ async def delete_all_api_keys(confirm: str | None = None) -> dict:
         In production/multi-user scenarios, add proper authentication.
     """
     if confirm != "CLEAR_ALL_KEYS":
+        log_security_event("Attempted to clear all API keys without confirmation.")
         raise HTTPException(
             status_code=400,
             detail="Confirmation required. Pass confirm=CLEAR_ALL_KEYS query parameter.",
@@ -385,6 +400,7 @@ async def reset_database_endpoint(request: ResetDatabaseRequest) -> dict:
         In production/multi-user scenarios, add proper authentication.
     """
     if request.confirm != "RESET_ALL_DATA":
+        log_security_event("Attempted to reset database without confirmation.")
         raise HTTPException(
             status_code=400,
             detail="Confirmation required. Pass confirm=RESET_ALL_DATA in request body.",
