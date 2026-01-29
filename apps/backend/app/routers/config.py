@@ -3,9 +3,8 @@
 import json
 import re
 from pathlib import Path
-
+from cryptography.fernet import Fernet
 from fastapi import APIRouter, HTTPException
-
 from app.config import settings
 from app.llm import check_llm_health, LLMConfig
 from app.schemas import (
@@ -33,6 +32,8 @@ router = APIRouter(prefix="/config", tags=["Configuration"])
 
 API_KEY_PATTERN = r'^[a-zA-Z0-9-_]{20,}$'  # Example pattern for API keys
 PROVIDER_NAME_PATTERN = r'^[a-zA-Z0-9-_]+$'  # Example pattern for provider names
+ENCRYPTION_KEY = settings.encryption_key  # Load encryption key from settings
+fernet = Fernet(ENCRYPTION_KEY)
 
 def _get_config_path() -> Path:
     """Get path to config storage file."""
@@ -42,14 +43,17 @@ def _load_config() -> dict:
     """Load config from file."""
     path = _get_config_path()
     if path.exists():
-        return json.loads(path.read_text())
+        encrypted_data = path.read_text()
+        decrypted_data = fernet.decrypt(encrypted_data.encode()).decode()
+        return json.loads(decrypted_data)
     return {}
 
 def _save_config(config: dict) -> None:
     """Save config to file."""
     path = _get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(config, indent=2))
+    encrypted_data = fernet.encrypt(json.dumps(config, indent=2).encode()).decode()
+    path.write_text(encrypted_data)
 
 def _mask_api_key(key: str) -> str:
     """Mask API key for display."""
@@ -61,12 +65,12 @@ def _mask_api_key(key: str) -> str:
 
 def validate_api_key(api_key: str) -> None:
     """Validate API key format."""
-    if not re.match(API_KEY_PATTERN, api_key):
+    if not isinstance(api_key, str) or not re.match(API_KEY_PATTERN, api_key):
         raise HTTPException(status_code=400, detail="Invalid API key format.")
 
 def validate_provider(provider: str) -> None:
     """Validate provider name format."""
-    if not re.match(PROVIDER_NAME_PATTERN, provider):
+    if not isinstance(provider, str) or not re.match(PROVIDER_NAME_PATTERN, provider):
         raise HTTPException(status_code=400, detail="Invalid provider name format.")
 
 @router.get("/llm-api-key", response_model=LLMConfigResponse)
