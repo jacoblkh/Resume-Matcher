@@ -17,9 +17,6 @@ RUN npm ci
 # Copy frontend source
 COPY apps/frontend/ ./
 
-# Set environment variable for production build
-ENV NEXT_PUBLIC_API_URL=http://localhost:8000
-
 # Build the frontend
 RUN npm run build
 
@@ -130,3 +127,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 # Start the application
 CMD ["/app/start.sh"]
+
+# ============================================
+# Secrets Management
+# ============================================
+# Ensure that sensitive data is provided at runtime using Docker secrets
+# Example: Use `docker secret create` to create secrets and `--secret` flag in `docker service create`
+# The following environment variable should be set at runtime, not build time:
+# ENV NEXT_PUBLIC_API_URL=<secret_value>
+# Use Docker secrets to manage sensitive information securely.

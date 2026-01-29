@@ -79,7 +79,7 @@ def validate_api_key(api_key: str) -> bool:
         True if valid, False otherwise.
     """
     # Example validation: length check and regex pattern
-    return bool(re.match(r'^[A-Za-z0-9_-]{32,}$', api_key))
+    return bool(re.match(r'^[A-Za-z0-9_-]{32,}$', api_key)) and len(api_key) <= 64
 
 
 def get_api_keys_from_config() -> dict[str, str]:

@@ -30,8 +30,8 @@ from app.database import db
 
 router = APIRouter(prefix="/config", tags=["Configuration"])
 
-API_KEY_PATTERN = r'^[a-zA-Z0-9-_]{20,}$'  # Example pattern for API keys
-PROVIDER_NAME_PATTERN = r'^[a-zA-Z0-9-_]+$'  # Example pattern for provider names
+API_KEY_PATTERN = r'^[a-zA-Z0-9-_]{20,50}$'  # Example pattern for API keys
+PROVIDER_NAME_PATTERN = r'^[a-zA-Z0-9-_]{3,30}$'  # Example pattern for provider names
 ENCRYPTION_KEY = settings.encryption_key  # Load encryption key from settings
 fernet = Fernet(ENCRYPTION_KEY)
 
@@ -74,8 +74,10 @@ def validate_provider(provider: str) -> None:
     """Validate provider name format."""
     if not isinstance(provider, str) or not re.match(PROVIDER_NAME_PATTERN, provider):
         raise HTTPException(status_code=400, detail="Invalid provider name format.")
-    if len(provider) < 3 or len(provider) > 30:  # Length check
-        raise HTTPException(status_code=400, detail="Provider name must be between 3 and 30 characters.")
+
+def sanitize_input(input_value: str) -> str:
+    """Sanitize input to prevent injection attacks."""
+    return re.sub(r'[^\w\s-]', '', input_value).strip()
 
 @router.get("/llm-api-key", response_model=LLMConfigResponse)
 async def get_llm_config_endpoint() -> LLMConfigResponse:
@@ -100,14 +102,14 @@ async def update_llm_config(request: LLMConfigRequest) -> LLMConfigResponse:
     # Update only provided fields
     if request.provider is not None:
         validate_provider(request.provider)
-        stored["provider"] = request.provider
+        stored["provider"] = sanitize_input(request.provider)
     if request.model is not None:
-        stored["model"] = request.model
+        stored["model"] = sanitize_input(request.model)
     if request.api_key is not None:
         validate_api_key(request.api_key)
         stored["api_key"] = request.api_key
     if request.api_base is not None:
-        stored["api_base"] = request.api_base
+        stored["api_base"] = sanitize_input(request.api_base)
 
     # Validate the new configuration
     test_config = LLMConfig(
