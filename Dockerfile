@@ -148,3 +148,19 @@ RUN hadolint /Dockerfile
 
 # Ensure linting is part of the CI pipeline
 # This should be included in the CI/CD configuration to ensure compliance with best practices.
+
+# ============================================
+# Security Hardening
+# ============================================
+# Set the root filesystem to be read-only
+RUN chmod -R a-w /
+
+# Use Docker's read-only option for the container
+# This should be set in the Docker run command or Docker Compose file:
+# --read-only
+
+# Use tmpfs for non-persistent storage
+RUN mkdir -p /app/backend/data && mount -t tmpfs tmpfs /app/backend/data
+
+# Ensure that the application does not write to the root filesystem
+# Additional security measures can be added as needed.
