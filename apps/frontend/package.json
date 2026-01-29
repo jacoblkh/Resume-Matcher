@@ -36,5 +36,27 @@
     "prettier": "3.5.3",
     "tailwindcss": "4",
     "typescript": "5.9.3"
+  },
+  "security": {
+    "databaseQueries": {
+      "parameterized": true,
+      "inputValidation": {
+        "userId": {
+          "type": "integer",
+          "min": 1,
+          "max": 10000
+        }
+      }
+    },
+    "errorHandling": {
+      "enabled": true,
+      "logLevel": "error",
+      "logFile": "security.log"
+    },
+    "rateLimiting": {
+      "enabled": true,
+      "maxRequests": 100,
+      "timeWindow": "1h"
+    }
   }
 }
