@@ -23,12 +23,23 @@ interface SafeHtmlProps {
  */
 export const SafeHtml: React.FC<SafeHtmlProps> = ({ html, className, as: Component = 'span' }) => {
   // Handle empty or undefined content
-  if (!html) {
+  if (!html || typeof html !== 'string' || html.length > 10000) {
+    console.error('Invalid HTML content provided to SafeHtml component.');
+    return null;
+  }
+
+  // Additional validation: Check for allowed HTML tags using regex
+  const allowedTagsRegex = /<\/?(strong|em|u|a)[^>]*>/gi;
+  if (!allowedTagsRegex.test(html)) {
+    console.error('HTML content contains disallowed tags.');
     return null;
   }
 
   // Sanitize the HTML before rendering
   const cleanHtml = sanitizeHtml(html);
+
+  // Additional sanitization: Escape any remaining potentially dangerous characters
+  const escapedHtml = cleanHtml.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   return (
     <Component
@@ -37,7 +48,7 @@ export const SafeHtml: React.FC<SafeHtmlProps> = ({ html, className, as: Compone
         '[&_a]:text-inherit [&_a]:underline',
         className
       )}
-      dangerouslySetInnerHTML={{ __html: cleanHtml }}
+      dangerouslySetInnerHTML={{ __html: escapedHtml }}
     />
   );
 };

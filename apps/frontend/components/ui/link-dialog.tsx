@@ -7,6 +7,22 @@ import { Input } from './input';
 import { Label } from './label';
 import { X } from 'lucide-react';
 
+// Function to sanitize URLs
+const sanitizeUrl = (url: string): string => {
+  const urlPattern = /^(https?:\/\/|mailto:)/i;
+  if (!urlPattern.test(url)) {
+    return `https://${url}`;
+  }
+  return url;
+};
+
+// Function to sanitize text inputs
+const sanitizeText = (text: string): string => {
+  const element = document.createElement('div');
+  element.innerText = text; // Use innerText to escape HTML
+  return element.innerHTML; // Return sanitized HTML
+};
+
 interface LinkDialogProps {
   editor: Editor;
   onClose: () => void;
@@ -47,28 +63,28 @@ export const LinkDialog: React.FC<LinkDialogProps> = ({ editor, onClose }) => {
         return;
       }
 
-      // Ensure URL has protocol
-      let finalUrl = url;
-      if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('mailto:')) {
-        finalUrl = `https://${url}`;
-      }
+      // Sanitize URL
+      const finalUrl = sanitizeUrl(url);
+
+      // Sanitize text
+      const sanitizedText = sanitizeText(text);
 
       // If there's selected text, update it with the link
-      if (text && editor.state.selection.from !== editor.state.selection.to) {
+      if (sanitizedText && editor.state.selection.from !== editor.state.selection.to) {
         editor
           .chain()
           .focus()
           .extendMarkRange('link')
           .setLink({ href: finalUrl, target: '_blank', rel: 'noopener noreferrer' })
           .run();
-      } else if (text) {
+      } else if (sanitizedText) {
         // Insert new text with link using JSON structure (safe from XSS)
         editor
           .chain()
           .focus()
           .insertContent({
             type: 'text',
-            text: text,
+            text: sanitizedText,
             marks: [
               {
                 type: 'link',

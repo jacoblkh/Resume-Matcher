@@ -8,6 +8,7 @@ import Underline from '@tiptap/extension-underline';
 import { RichTextToolbar } from './rich-text-toolbar';
 import { LinkDialog } from './link-dialog';
 import { cn } from '@/lib/utils';
+import DOMPurify from 'dompurify';
 
 interface RichTextEditorProps {
   /** HTML content string */
@@ -70,7 +71,12 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
       const html = editor.getHTML();
       // Convert <p> tags to plain content since we're in bullet mode
       const cleanHtml = html.replace(/<p>/g, '').replace(/<\/p>/g, '').trim();
-      onChange(cleanHtml);
+      // Sanitize the HTML output to prevent XSS attacks
+      const sanitizedHtml = DOMPurify.sanitize(cleanHtml, {
+        ALLOWED_TAGS: ['b', 'i', 'em', 'strong', 'a', 'u', 'br', 'p'],
+        ALLOWED_ATTR: ['href', 'target', 'rel'],
+      });
+      onChange(sanitizedHtml);
       // Reset flag after a tick to ensure it stays true through the render cycle
       setTimeout(() => {
         isInternalUpdateRef.current = false;
