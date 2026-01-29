@@ -136,3 +136,15 @@ CMD ["/app/start.sh"]
 # The following environment variable should be set at runtime, not build time:
 # ENV NEXT_PUBLIC_API_URL=<secret_value>
 # Use Docker secrets to manage sensitive information securely.
+
+# ============================================
+# Linting Stage
+# ============================================
+# Integrate Hadolint for Dockerfile linting
+RUN apt-get update && apt-get install -y hadolint
+
+# Run Hadolint to lint the Dockerfile
+RUN hadolint /Dockerfile
+
+# Ensure linting is part of the CI pipeline
+# This should be included in the CI/CD configuration to ensure compliance with best practices.
