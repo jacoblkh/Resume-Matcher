@@ -4,6 +4,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from cryptography.fernet import Fernet
+import json
+import base64
+import os
 
 from tinydb import Query, TinyDB
 from tinydb.table import Table
@@ -18,6 +22,23 @@ class Database:
         self.db_path = db_path or settings.db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db: TinyDB | None = None
+        self.key = self.generate_key()
+        self.cipher = Fernet(self.key)
+
+    @staticmethod
+    def generate_key() -> bytes:
+        """Generate a key for encryption."""
+        return base64.urlsafe_b64encode(os.urandom(32))
+
+    def encrypt_data(self, data: dict) -> bytes:
+        """Encrypt data before storing."""
+        json_data = json.dumps(data).encode('utf-8')
+        return self.cipher.encrypt(json_data)
+
+    def decrypt_data(self, encrypted_data: bytes) -> dict:
+        """Decrypt data after retrieving."""
+        decrypted_data = self.cipher.decrypt(encrypted_data)
+        return json.loads(decrypted_data)
 
     @property
     def db(self) -> TinyDB:
@@ -81,20 +102,25 @@ class Database:
             "created_at": now,
             "updated_at": now,
         }
-        self.resumes.insert(doc)
+        encrypted_doc = self.encrypt_data(doc)
+        self.resumes.insert({"data": encrypted_doc})
         return doc
 
     def get_resume(self, resume_id: str) -> dict[str, Any] | None:
         """Get resume by ID."""
         Resume = Query()
-        result = self.resumes.search(Resume.resume_id == resume_id)
-        return result[0] if result else None
+        result = self.resumes.search(Resume.data['resume_id'] == resume_id)
+        if result:
+            return self.decrypt_data(result[0]['data'])
+        return None
 
     def get_master_resume(self) -> dict[str, Any] | None:
         """Get the master resume if exists."""
         Resume = Query()
-        result = self.resumes.search(Resume.is_master == True)
-        return result[0] if result else None
+        result = self.resumes.search(Resume.data['is_master'] == True)
+        if result:
+            return self.decrypt_data(result[0]['data'])
+        return None
 
     def update_resume(
         self, resume_id: str, updates: dict[str, Any]
@@ -102,27 +128,27 @@ class Database:
         """Update resume by ID."""
         Resume = Query()
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-        self.resumes.update(updates, Resume.resume_id == resume_id)
+        self.resumes.update({"data": self.encrypt_data(updates)}, Resume.data['resume_id'] == resume_id)
         return self.get_resume(resume_id)
 
     def delete_resume(self, resume_id: str) -> bool:
         """Delete resume by ID."""
         Resume = Query()
-        removed = self.resumes.remove(Resume.resume_id == resume_id)
+        removed = self.resumes.remove(Resume.data['resume_id'] == resume_id)
         return len(removed) > 0
 
     def list_resumes(self) -> list[dict[str, Any]]:
         """List all resumes."""
-        return list(self.resumes.all())
+        return [self.decrypt_data(item['data']) for item in self.resumes.all()]
 
     def set_master_resume(self, resume_id: str) -> bool:
         """Set a resume as the master, unsetting any existing master."""
         Resume = Query()
         # Unset current master
-        self.resumes.update({"is_master": False}, Resume.is_master == True)
+        self.resumes.update({"data": self.encrypt_data({"is_master": False})}, Resume.data['is_master'] == True)
         # Set new master
         updated = self.resumes.update(
-            {"is_master": True}, Resume.resume_id == resume_id
+            {"data": self.encrypt_data({"is_master": True})}, Resume.data['resume_id'] == resume_id
         )
         return len(updated) > 0
 

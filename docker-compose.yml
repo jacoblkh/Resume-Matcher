@@ -21,6 +21,39 @@ services:
       retries: 3
       start_period: 60s
 
+  resume-matcher-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: resume-matcher-dev
+    container_name: resume-matcher-dev
+    ports:
+      - "3001:3000"   # Frontend for development
+      - "8001:8000"   # Backend API for development
+    volumes:
+      - resume-data-dev:/app/backend/data
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:8001
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
 volumes:
   resume-data:
     driver: local
+  resume-data-dev:
+    driver: local
+
+networks:
+  production-network:
+    driver: bridge
+  development-network:
+    driver: bridge
+
+# Ensure to use separate cloud tenant accounts for production and development environments.
+# This enhances security by limiting exposure and simplifies resource management.

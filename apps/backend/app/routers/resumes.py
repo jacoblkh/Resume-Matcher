@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from fastapi.responses import Response
 from app.database import db
 from app.pdf import render_resume_pdf, PDFRenderError
 from app.config import settings
+from app.services.malware_scanner import scan_file_for_malware  # Hypothetical malware scanning service
 
 logger = logging.getLogger(__name__)
 from app.schemas import (
@@ -41,7 +43,6 @@ from app.services.cover_letter import (
     generate_outreach_message,
 )
 
-
 def _load_config() -> dict:
     """Load configuration from config file."""
     config_path = settings.config_path
@@ -49,18 +50,14 @@ def _load_config() -> dict:
         return json.loads(config_path.read_text())
     return {}
 
-
 def _load_feature_config() -> dict:
     """Load feature configuration from config file."""
     return _load_config()
 
-
 def _get_content_language() -> str:
     """Get configured content language from config file."""
     config = _load_config()
-    # Use content_language, fall back to legacy 'language' field, then default to 'en'
     return config.get("content_language", config.get("language", "en"))
-
 
 router = APIRouter(prefix="/resumes", tags=["Resumes"])
 
@@ -71,19 +68,25 @@ ALLOWED_TYPES = {
 }
 MAX_FILE_SIZE = 4 * 1024 * 1024  # 4MB
 
+def is_valid_filename(filename: str) -> bool:
+    """Validate the filename to prevent directory traversal attacks."""
+    return re.match(r'^[\w,\s-]+\.[A-Za-z]{3}$', filename) is not None
 
 @router.post("/upload", response_model=ResumeUploadResponse)
 async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
-    """Upload and process a resume file (PDF/DOCX).
-
-    Converts the file to Markdown and stores it in the database.
-    Optionally parses to structured JSON if LLM is configured.
-    """
+    """Upload and process a resume file (PDF/DOCX)."""
     # Validate file type
     if file.content_type not in ALLOWED_TYPES:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid file type: {file.content_type}. Allowed: PDF, DOC, DOCX",
+        )
+
+    # Validate filename
+    if not is_valid_filename(file.filename):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid filename. Only alphanumeric characters, spaces, and dashes are allowed.",
         )
 
     # Read and validate size
@@ -96,6 +99,11 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
 
     if len(content) == 0:
         raise HTTPException(status_code=400, detail="Empty file")
+
+    # Scan for malware
+    is_safe = await scan_file_for_malware(content)
+    if not is_safe:
+        raise HTTPException(status_code=400, detail="Uploaded file is potentially malicious.")
 
     # Convert to markdown
     try:
@@ -133,7 +141,6 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
         resume["processed_data"] = processed_data
         resume["processing_status"] = "ready"
     except Exception as e:
-        # LLM parsing failed, update status to failed
         logger.warning(f"Resume parsing to JSON failed for {file.filename}: {e}")
         db.update_resume(resume["resume_id"], {"processing_status": "failed"})
         resume["processing_status"] = "failed"
@@ -144,15 +151,9 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
         resume_id=resume["resume_id"],
     )
 
-
 @router.get("", response_model=ResumeFetchResponse)
 async def get_resume(resume_id: str = Query(...)) -> ResumeFetchResponse:
-    """Fetch resume details by ID.
-
-    Returns both raw markdown and structured data (if available),
-    plus cover letter and outreach message if they exist.
-    Applies lazy migration for section metadata if needed.
-    """
+    """Fetch resume details by ID."""
     resume = db.get_resume(resume_id)
 
     if not resume:
@@ -163,7 +164,7 @@ async def get_resume(resume_id: str = Query(...)) -> ResumeFetchResponse:
 
     # Build response
     raw_resume = RawResume(
-        id=None,  # TinyDB doesn't have numeric IDs like SQL
+        id=None,
         content=resume["content"],
         content_type=resume["content_type"],
         created_at=resume["created_at"],
@@ -193,7 +194,6 @@ async def get_resume(resume_id: str = Query(...)) -> ResumeFetchResponse:
         ),
     )
 
-
 @router.get("/list", response_model=ResumeListResponse)
 async def list_resumes(include_master: bool = Query(False)) -> ResumeListResponse:
     """List resumes, optionally including the master resume."""
@@ -218,17 +218,11 @@ async def list_resumes(include_master: bool = Query(False)) -> ResumeListRespons
 
     return ResumeListResponse(request_id=str(uuid4()), data=summaries)
 
-
 @router.post("/improve", response_model=ImproveResumeResponse)
 async def improve_resume_endpoint(
     request: ImproveResumeRequest,
 ) -> ImproveResumeResponse:
-    """Improve/tailor a resume for a specific job description.
-
-    Uses LLM to analyze the job and generate an optimized resume version
-    with improvement suggestions. Also generates cover letter and outreach
-    message if enabled in feature configuration.
-    """
+    """Improve/tailor a resume for a specific job description."""
     # Fetch resume
     resume = db.get_resume(request.resume_id)
     if not resume:
@@ -344,7 +338,6 @@ async def improve_resume_endpoint(
             detail="Failed to improve resume. Please try again.",
         )
 
-
 @router.patch("/{resume_id}", response_model=ResumeFetchResponse)
 async def update_resume_endpoint(
     resume_id: str, resume_data: ResumeData
@@ -393,7 +386,6 @@ async def update_resume_endpoint(
         ),
     )
 
-
 @router.get("/{resume_id}/pdf")
 async def download_resume_pdf(
     resume_id: str,
@@ -414,22 +406,7 @@ async def download_resume_pdf(
     showContactIcons: bool = Query(False),
     accentColor: str = Query("blue", pattern="^(blue|green|orange|red)$"),
 ) -> Response:
-    """Generate a PDF for a resume using headless Chromium.
-
-    Accepts template settings for customization:
-    - template: swiss-single, swiss-two-column, modern, or modern-two-column
-    - pageSize: A4 or LETTER
-    - marginTop/Bottom/Left/Right: page margins in mm (5-25)
-    - sectionSpacing: gap between sections (1-5)
-    - itemSpacing: gap between items (1-5)
-    - lineHeight: text line height (1-5)
-    - fontSize: base font size (1-5)
-    - headerScale: header size scale (1-5)
-    - headerFont: serif, sans-serif, or mono
-    - bodyFont: serif, sans-serif, or mono
-    - compactMode: enable tighter spacing
-    - showContactIcons: show icons in contact info
-    """
+    """Generate a PDF for a resume using headless Chromium."""
     resume = db.get_resume(resume_id)
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
@@ -472,7 +449,6 @@ async def download_resume_pdf(
     headers = {"Content-Disposition": f'attachment; filename="resume_{resume_id}.pdf"'}
     return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
 
-
 @router.delete("/{resume_id}")
 async def delete_resume(resume_id: str) -> dict:
     """Delete a resume by ID."""
@@ -480,7 +456,6 @@ async def delete_resume(resume_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Resume not found")
 
     return {"message": "Resume deleted successfully"}
-
 
 @router.patch("/{resume_id}/cover-letter")
 async def update_cover_letter(
@@ -494,7 +469,6 @@ async def update_cover_letter(
     db.update_resume(resume_id, {"cover_letter": request.content})
     return {"message": "Cover letter updated successfully"}
 
-
 @router.patch("/{resume_id}/outreach-message")
 async def update_outreach_message(
     resume_id: str, request: UpdateOutreachMessageRequest
@@ -507,24 +481,15 @@ async def update_outreach_message(
     db.update_resume(resume_id, {"outreach_message": request.content})
     return {"message": "Outreach message updated successfully"}
 
-
 @router.post(
     "/{resume_id}/generate-cover-letter", response_model=GenerateContentResponse
 )
 async def generate_cover_letter_endpoint(resume_id: str) -> GenerateContentResponse:
-    """Generate a cover letter on-demand for an existing tailored resume.
-
-    This endpoint allows users to generate a cover letter after a resume has been
-    tailored, without needing to re-tailor the entire resume. It requires:
-    - The resume must be a tailored resume (has parent_id)
-    - The resume must have an associated job context in the improvements table
-    """
-    # Get the resume
+    """Generate a cover letter on-demand for an existing tailored resume."""
     resume = db.get_resume(resume_id)
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
 
-    # Check if it's a tailored resume (has parent_id)
     if not resume.get("parent_id"):
         raise HTTPException(
             status_code=400,
@@ -532,7 +497,6 @@ async def generate_cover_letter_endpoint(resume_id: str) -> GenerateContentRespo
             "Please tailor this resume to a job description first.",
         )
 
-    # Get improvement record to find the job_id
     improvement = db.get_improvement_by_tailored_resume(resume_id)
     if not improvement:
         raise HTTPException(
@@ -541,7 +505,6 @@ async def generate_cover_letter_endpoint(resume_id: str) -> GenerateContentRespo
             "The resume may have been created before job tracking was implemented.",
         )
 
-    # Get the job description
     job = db.get_job(improvement["job_id"])
     if not job:
         raise HTTPException(
@@ -549,7 +512,6 @@ async def generate_cover_letter_endpoint(resume_id: str) -> GenerateContentRespo
             detail="The associated job description was not found.",
         )
 
-    # Get resume data
     resume_data = resume.get("processed_data")
     if not resume_data:
         raise HTTPException(
@@ -557,10 +519,8 @@ async def generate_cover_letter_endpoint(resume_id: str) -> GenerateContentRespo
             detail="Resume has no processed data. Please re-upload the resume.",
         )
 
-    # Get language setting
     language = _get_content_language()
 
-    # Generate cover letter
     try:
         cover_letter_content = await generate_cover_letter(
             resume_data, job["content"], language
@@ -572,161 +532,7 @@ async def generate_cover_letter_endpoint(resume_id: str) -> GenerateContentRespo
             detail="Failed to generate cover letter. Please try again.",
         )
 
-    # Save to resume record
     db.update_resume(resume_id, {"cover_letter": cover_letter_content})
 
     return GenerateContentResponse(
-        content=cover_letter_content,
-        message="Cover letter generated successfully",
-    )
-
-
-@router.post("/{resume_id}/generate-outreach", response_model=GenerateContentResponse)
-async def generate_outreach_endpoint(resume_id: str) -> GenerateContentResponse:
-    """Generate an outreach message on-demand for an existing tailored resume.
-
-    This endpoint allows users to generate a cold outreach message after a resume
-    has been tailored. It requires:
-    - The resume must be a tailored resume (has parent_id)
-    - The resume must have an associated job context in the improvements table
-    """
-    # Get the resume
-    resume = db.get_resume(resume_id)
-    if not resume:
-        raise HTTPException(status_code=404, detail="Resume not found")
-
-    # Check if it's a tailored resume (has parent_id)
-    if not resume.get("parent_id"):
-        raise HTTPException(
-            status_code=400,
-            detail="Outreach message can only be generated for tailored resumes. "
-            "Please tailor this resume to a job description first.",
-        )
-
-    # Get improvement record to find the job_id
-    improvement = db.get_improvement_by_tailored_resume(resume_id)
-    if not improvement:
-        raise HTTPException(
-            status_code=400,
-            detail="No job context found for this resume. "
-            "The resume may have been created before job tracking was implemented.",
-        )
-
-    # Get the job description
-    job = db.get_job(improvement["job_id"])
-    if not job:
-        raise HTTPException(
-            status_code=404,
-            detail="The associated job description was not found.",
-        )
-
-    # Get resume data
-    resume_data = resume.get("processed_data")
-    if not resume_data:
-        raise HTTPException(
-            status_code=400,
-            detail="Resume has no processed data. Please re-upload the resume.",
-        )
-
-    # Get language setting
-    language = _get_content_language()
-
-    # Generate outreach message
-    try:
-        outreach_content = await generate_outreach_message(
-            resume_data, job["content"], language
-        )
-    except Exception as e:
-        logger.error(f"Outreach message generation failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to generate outreach message. Please try again.",
-        )
-
-    # Save to resume record
-    db.update_resume(resume_id, {"outreach_message": outreach_content})
-
-    return GenerateContentResponse(
-        content=outreach_content,
-        message="Outreach message generated successfully",
-    )
-
-
-@router.get("/{resume_id}/job-description")
-async def get_job_description_for_resume(resume_id: str) -> dict:
-    """Get the job description used to tailor this resume.
-
-    This endpoint retrieves the original job description that was used
-    to tailor a resume. Only works for tailored resumes (those with parent_id).
-    """
-    # Get the resume
-    resume = db.get_resume(resume_id)
-    if not resume:
-        raise HTTPException(status_code=404, detail="Resume not found")
-
-    # Check if it's a tailored resume (has parent_id)
-    if not resume.get("parent_id"):
-        raise HTTPException(
-            status_code=400,
-            detail="Job description is only available for tailored resumes.",
-        )
-
-    # Get improvement record to find the job_id
-    improvement = db.get_improvement_by_tailored_resume(resume_id)
-    if not improvement:
-        raise HTTPException(
-            status_code=400,
-            detail="No job context found for this resume. "
-            "The resume may have been created before job tracking was implemented.",
-        )
-
-    # Get the job description
-    job = db.get_job(improvement["job_id"])
-    if not job:
-        raise HTTPException(
-            status_code=404,
-            detail="The associated job description was not found.",
-        )
-
-    return {
-        "job_id": job["job_id"],
-        "content": job["content"],
-    }
-
-
-@router.get("/{resume_id}/cover-letter/pdf")
-async def download_cover_letter_pdf(
-    resume_id: str,
-    pageSize: str = Query("A4", pattern="^(A4|LETTER)$"),
-) -> Response:
-    """Generate a PDF for a cover letter using headless Chromium.
-
-    Args:
-        resume_id: The ID of the resume containing the cover letter
-        pageSize: A4 or LETTER
-    """
-    resume = db.get_resume(resume_id)
-    if not resume:
-        raise HTTPException(status_code=404, detail="Resume not found")
-
-    cover_letter = resume.get("cover_letter")
-    if not cover_letter:
-        raise HTTPException(
-            status_code=404, detail="No cover letter found for this resume"
-        )
-
-    # Build print URL (same pattern as resume PDF)
-    url = f"{settings.frontend_base_url}/print/cover-letter/{resume_id}?pageSize={pageSize}"
-
-    # Render PDF with cover letter selector
-    try:
-        pdf_bytes = await render_resume_pdf(
-            url, pageSize, selector=".cover-letter-print"
-        )
-    except PDFRenderError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-
-    headers = {
-        "Content-Disposition": f'attachment; filename="cover_letter_{resume_id}.pdf"'
-    }
-    return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
+        content=cover_letter_content

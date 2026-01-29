@@ -7,6 +7,7 @@ import { ChevronDown } from 'lucide-react';
 type Status = 'idle' | 'loading' | 'saving' | 'saved' | 'error';
 
 const MASK_THRESHOLD = 6;
+const API_KEY_REGEX = /^sk-[a-zA-Z0-9]{32}$/; // Example regex for API key validation
 
 export default function ApiKeyMenu(): React.ReactElement {
   const [isOpen, setIsOpen] = useState(false);
@@ -60,6 +61,9 @@ export default function ApiKeyMenu(): React.ReactElement {
     setError(null);
     try {
       const trimmed = draft.trim();
+      if (!API_KEY_REGEX.test(trimmed)) {
+        throw new Error('Invalid API key format');
+      }
       const saved = await updateLlmApiKey(trimmed);
       setApiKey(saved);
       setDraft(saved);

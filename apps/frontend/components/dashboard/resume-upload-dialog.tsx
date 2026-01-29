@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useFileUpload, formatBytes } from '@/hooks/use-file-upload';
 import { getUploadUrl } from '@/lib/api/client';
+import { scanFileForMalware } from '@/lib/malware-scanner'; // Hypothetical malware scanning function
 
 interface ResumeUploadDialogProps {
   trigger?: React.ReactNode;
@@ -58,23 +59,21 @@ export function ResumeUploadDialog({ trigger, onUploadComplete }: ResumeUploadDi
     accept: ACCEPTED_FILE_TYPES.join(','),
     multiple: false,
     uploadUrl: UPLOAD_URL,
-    onUploadSuccess: (uploadedFile, response) => {
+    onUploadSuccess: async (uploadedFile, response) => {
       const data = response as { resume_id?: string };
       if (data.resume_id) {
         setUploadFeedback({
           type: 'success',
           message: 'Resume uploaded successfully.',
         });
-        // Defer parent state update to avoid setState during render
         const resumeId = data.resume_id;
         setTimeout(() => {
           onUploadComplete?.(resumeId);
         }, 0);
-        // Close dialog after a short delay to show success state
         setTimeout(() => {
           setIsOpen(false);
           setUploadFeedback(null);
-          removeFile(uploadedFile.id); // Clear file for next time
+          removeFile(uploadedFile.id);
         }, 1500);
       } else {
         setUploadFeedback({
@@ -96,6 +95,25 @@ export function ResumeUploadDialog({ trigger, onUploadComplete }: ResumeUploadDi
 
   const currentFile = files[0];
   const displayErrors = uploadFeedback?.type === 'error' ? [uploadFeedback.message] : errors;
+
+  const handleFileUpload = async (file: File) => {
+    // Validate file type and size
+    if (!ACCEPTED_FILE_TYPES.includes(file.type)) {
+      throw new Error('Invalid file type. Only PDF and DOC files are accepted.');
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      throw new Error('File size exceeds the maximum limit of 4MB.');
+    }
+
+    // Scan file for malware
+    const isMalicious = await scanFileForMalware(file);
+    if (isMalicious) {
+      throw new Error('Uploaded file is malicious and has been rejected.');
+    }
+
+    // Proceed with the upload if the file is safe
+    // Call the original upload function here
+  };
 
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>

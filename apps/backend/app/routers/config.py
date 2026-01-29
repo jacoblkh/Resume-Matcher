@@ -1,10 +1,10 @@
 """LLM configuration endpoints."""
 
 import json
+import re
 from pathlib import Path
-
+from cryptography.fernet import Fernet
 from fastapi import APIRouter, HTTPException
-
 from app.config import settings
 from app.llm import check_llm_health, LLMConfig
 from app.schemas import (
@@ -30,26 +30,30 @@ from app.database import db
 
 router = APIRouter(prefix="/config", tags=["Configuration"])
 
+API_KEY_PATTERN = r'^[a-zA-Z0-9-_]{20,50}$'  # Example pattern for API keys
+PROVIDER_NAME_PATTERN = r'^[a-zA-Z0-9-_]{3,30}$'  # Example pattern for provider names
+ENCRYPTION_KEY = settings.encryption_key  # Load encryption key from settings
+fernet = Fernet(ENCRYPTION_KEY)
 
 def _get_config_path() -> Path:
     """Get path to config storage file."""
     return settings.config_path
 
-
 def _load_config() -> dict:
     """Load config from file."""
     path = _get_config_path()
     if path.exists():
-        return json.loads(path.read_text())
+        encrypted_data = path.read_text()
+        decrypted_data = fernet.decrypt(encrypted_data.encode()).decode()
+        return json.loads(decrypted_data)
     return {}
-
 
 def _save_config(config: dict) -> None:
     """Save config to file."""
     path = _get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(config, indent=2))
-
+    encrypted_data = fernet.encrypt(json.dumps(config, indent=2).encode()).decode()
+    path.write_text(encrypted_data)
 
 def _mask_api_key(key: str) -> str:
     """Mask API key for display."""
@@ -59,6 +63,34 @@ def _mask_api_key(key: str) -> str:
         return "*" * len(key)
     return key[:4] + "*" * (len(key) - 8) + key[-4:]
 
+def validate_api_key(api_key: str) -> None:
+    """Validate API key format."""
+    if not isinstance(api_key, str) or not re.match(API_KEY_PATTERN, api_key):
+        raise HTTPException(status_code=400, detail="Invalid API key format.")
+    if len(api_key) < 20 or len(api_key) > 50:  # Length check
+        raise HTTPException(status_code=400, detail="API key must be between 20 and 50 characters.")
+    # Additional validation for common patterns in API keys
+    if " " in api_key or "\n" in api_key:
+        raise HTTPException(status_code=400, detail="API key must not contain whitespace characters.")
+
+def validate_provider(provider: str) -> None:
+    """Validate provider name format."""
+    if not isinstance(provider, str) or not re.match(PROVIDER_NAME_PATTERN, provider):
+        raise HTTPException(status_code=400, detail="Invalid provider name format.")
+    # Additional validation for provider name
+    if len(provider) < 3 or len(provider) > 30:
+        raise HTTPException(status_code=400, detail="Provider name must be between 3 and 30 characters.")
+
+def sanitize_input(input_value: str) -> str:
+    """Sanitize input to prevent injection attacks."""
+    sanitized = re.sub(r'[^\w\s-]', '', input_value).strip()
+    # Additional sanitization to remove leading/trailing spaces
+    return sanitized
+
+def log_security_event(message: str) -> None:
+    """Log security events for monitoring."""
+    # Placeholder for logging mechanism
+    print(f"SECURITY EVENT: {message}")
 
 @router.get("/llm-api-key", response_model=LLMConfigResponse)
 async def get_llm_config_endpoint() -> LLMConfigResponse:
@@ -72,7 +104,6 @@ async def get_llm_config_endpoint() -> LLMConfigResponse:
         api_base=stored.get("api_base", settings.llm_api_base),
     )
 
-
 @router.put("/llm-api-key", response_model=LLMConfigResponse)
 async def update_llm_config(request: LLMConfigRequest) -> LLMConfigResponse:
     """Update LLM configuration.
@@ -83,13 +114,15 @@ async def update_llm_config(request: LLMConfigRequest) -> LLMConfigResponse:
 
     # Update only provided fields
     if request.provider is not None:
-        stored["provider"] = request.provider
+        validate_provider(request.provider)
+        stored["provider"] = sanitize_input(request.provider)
     if request.model is not None:
-        stored["model"] = request.model
+        stored["model"] = sanitize_input(request.model)
     if request.api_key is not None:
+        validate_api_key(request.api_key)
         stored["api_key"] = request.api_key
     if request.api_base is not None:
-        stored["api_base"] = request.api_base
+        stored["api_base"] = sanitize_input(request.api_base)
 
     # Validate the new configuration
     test_config = LLMConfig(
@@ -101,6 +134,7 @@ async def update_llm_config(request: LLMConfigRequest) -> LLMConfigResponse:
 
     health = await check_llm_health(test_config)
     if not health["healthy"]:
+        log_security_event("Invalid LLM configuration attempted.")
         raise HTTPException(
             status_code=400,
             detail="Invalid LLM configuration",
@@ -116,7 +150,6 @@ async def update_llm_config(request: LLMConfigRequest) -> LLMConfigResponse:
         api_base=test_config.api_base,
     )
 
-
 @router.post("/llm-test")
 async def test_llm_connection() -> dict:
     """Test current LLM connection."""
@@ -131,7 +164,6 @@ async def test_llm_connection() -> dict:
 
     return await check_llm_health(config)
 
-
 @router.get("/features", response_model=FeatureConfigResponse)
 async def get_feature_config() -> FeatureConfigResponse:
     """Get current feature configuration."""
@@ -141,7 +173,6 @@ async def get_feature_config() -> FeatureConfigResponse:
         enable_cover_letter=stored.get("enable_cover_letter", False),
         enable_outreach_message=stored.get("enable_outreach_message", False),
     )
-
 
 @router.put("/features", response_model=FeatureConfigResponse)
 async def update_feature_config(request: FeatureConfigRequest) -> FeatureConfigResponse:
@@ -162,10 +193,8 @@ async def update_feature_config(request: FeatureConfigRequest) -> FeatureConfigR
         enable_outreach_message=stored.get("enable_outreach_message", False),
     )
 
-
 # Supported languages for i18n
 SUPPORTED_LANGUAGES = ["en", "es", "zh", "ja"]
-
 
 @router.get("/language", response_model=LanguageConfigResponse)
 async def get_language_config() -> LanguageConfigResponse:
@@ -180,7 +209,6 @@ async def get_language_config() -> LanguageConfigResponse:
         content_language=stored.get("content_language", legacy_language),
         supported_languages=SUPPORTED_LANGUAGES,
     )
-
 
 @router.put("/language", response_model=LanguageConfigResponse)
 async def update_language_config(
@@ -219,10 +247,8 @@ async def update_language_config(
         supported_languages=SUPPORTED_LANGUAGES,
     )
 
-
 # Supported API key providers
 SUPPORTED_PROVIDERS = ["openai", "anthropic", "google", "openrouter", "deepseek"]
-
 
 def _mask_key_short(key: str | None) -> str | None:
     """Mask API key showing only last 4 characters."""
@@ -231,7 +257,6 @@ def _mask_key_short(key: str | None) -> str | None:
     if len(key) <= 4:
         return "*" * len(key)
     return "..." + key[-4:]
-
 
 @router.get("/api-keys", response_model=ApiKeyStatusResponse)
 async def get_api_keys_status() -> ApiKeyStatusResponse:
@@ -255,7 +280,6 @@ async def get_api_keys_status() -> ApiKeyStatusResponse:
 
     return ApiKeyStatusResponse(providers=providers)
 
-
 @router.post("/api-keys", response_model=ApiKeysUpdateResponse)
 async def update_api_keys(request: ApiKeysUpdateRequest) -> ApiKeysUpdateResponse:
     """Update API keys for one or more providers.
@@ -269,6 +293,7 @@ async def update_api_keys(request: ApiKeysUpdateRequest) -> ApiKeysUpdateRespons
     # Update each provider if provided in request
     if request.openai is not None:
         if request.openai:
+            validate_api_key(request.openai)
             stored_keys["openai"] = request.openai
         elif "openai" in stored_keys:
             del stored_keys["openai"]
@@ -276,6 +301,7 @@ async def update_api_keys(request: ApiKeysUpdateRequest) -> ApiKeysUpdateRespons
 
     if request.anthropic is not None:
         if request.anthropic:
+            validate_api_key(request.anthropic)
             stored_keys["anthropic"] = request.anthropic
         elif "anthropic" in stored_keys:
             del stored_keys["anthropic"]
@@ -283,6 +309,7 @@ async def update_api_keys(request: ApiKeysUpdateRequest) -> ApiKeysUpdateRespons
 
     if request.google is not None:
         if request.google:
+            validate_api_key(request.google)
             stored_keys["google"] = request.google
         elif "google" in stored_keys:
             del stored_keys["google"]
@@ -290,6 +317,7 @@ async def update_api_keys(request: ApiKeysUpdateRequest) -> ApiKeysUpdateRespons
 
     if request.openrouter is not None:
         if request.openrouter:
+            validate_api_key(request.openrouter)
             stored_keys["openrouter"] = request.openrouter
         elif "openrouter" in stored_keys:
             del stored_keys["openrouter"]
@@ -297,6 +325,7 @@ async def update_api_keys(request: ApiKeysUpdateRequest) -> ApiKeysUpdateRespons
 
     if request.deepseek is not None:
         if request.deepseek:
+            validate_api_key(request.deepseek)
             stored_keys["deepseek"] = request.deepseek
         elif "deepseek" in stored_keys:
             del stored_keys["deepseek"]
@@ -308,7 +337,6 @@ async def update_api_keys(request: ApiKeysUpdateRequest) -> ApiKeysUpdateRespons
         message=f"Updated {len(updated)} API key(s)",
         updated_providers=updated,
     )
-
 
 @router.delete("/api-keys")
 async def delete_all_api_keys(confirm: str | None = None) -> dict:
@@ -327,13 +355,13 @@ async def delete_all_api_keys(confirm: str | None = None) -> dict:
         In production/multi-user scenarios, add proper authentication.
     """
     if confirm != "CLEAR_ALL_KEYS":
+        log_security_event("Attempted to clear all API keys without confirmation.")
         raise HTTPException(
             status_code=400,
             detail="Confirmation required. Pass confirm=CLEAR_ALL_KEYS query parameter.",
         )
     clear_all_api_keys()
     return {"message": "All API keys have been cleared"}
-
 
 @router.delete("/api-keys/{provider}")
 async def delete_api_key(provider: str) -> dict:
@@ -345,16 +373,11 @@ async def delete_api_key(provider: str) -> dict:
     Returns:
         Success message
     """
-    if provider not in SUPPORTED_PROVIDERS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported provider: {provider}. Supported: {SUPPORTED_PROVIDERS}",
-        )
+    validate_provider(provider)
 
     delete_api_key_from_config(provider)
 
     return {"message": f"API key for {provider} has been removed"}
-
 
 @router.post("/reset")
 async def reset_database_endpoint(request: ResetDatabaseRequest) -> dict:
@@ -377,6 +400,7 @@ async def reset_database_endpoint(request: ResetDatabaseRequest) -> dict:
         In production/multi-user scenarios, add proper authentication.
     """
     if request.confirm != "RESET_ALL_DATA":
+        log_security_event("Attempted to reset database without confirmation.")
         raise HTTPException(
             status_code=400,
             detail="Confirmation required. Pass confirm=RESET_ALL_DATA in request body.",

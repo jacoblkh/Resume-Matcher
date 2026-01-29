@@ -180,10 +180,13 @@ Minimum recommended resources:
 
 ## Security Notes
 
-1. **API Keys**: Stored in `config.json` inside the container volume. Not accessible without volume access.
+1. **API Keys**: Stored in `config.json` inside the container volume. Not accessible without volume access. Ensure that the configuration file is only writable by the container user.
 2. **Non-root User**: Container runs as unprivileged user `appuser` (UID 1000).
 3. **Network**: Only ports 3000 and 8000 are exposed.
-4. **No Secrets in Image**: All sensitive configuration is done at runtime via UI.
+4. **No Secrets in Image**: All sensitive configuration is done at runtime via UI. Use Docker secrets or `podman-secret-create` for managing sensitive data.
+5. **Input Validation**: Ensure that all user inputs, especially API keys, are validated using regex patterns to enforce length and character restrictions.
+6. **Error Handling**: Implement try-catch blocks around sensitive operations with logging of security-relevant errors without exposing sensitive information.
+7. **Rate Limiting**: Consider implementing rate limiting on API endpoints to prevent abuse.
 
 ## Updating
 

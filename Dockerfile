@@ -4,7 +4,10 @@
 # ============================================
 # Stage 1: Build Frontend
 # ============================================
-FROM node:22-slim AS frontend-builder
+FROM alpine:latest AS frontend-builder
+
+# Install necessary dependencies
+RUN apk add --no-cache nodejs npm
 
 WORKDIR /app/frontend
 
@@ -17,29 +20,19 @@ RUN npm ci
 # Copy frontend source
 COPY apps/frontend/ ./
 
-# Set environment variable for production build
-ENV NEXT_PUBLIC_API_URL=http://localhost:8000
-
 # Build the frontend
 RUN npm run build
 
 # ============================================
 # Stage 2: Final Image
 # ============================================
-FROM python:3.13-slim
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    NODE_ENV=production
+FROM alpine:latest
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Node.js for frontend
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
     curl \
-    # Playwright dependencies
     libnss3 \
     libnspr4 \
     libatk1.0-0 \
@@ -56,14 +49,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
     libcairo2 \
     libatspi2.0-0 \
-    libgtk-3-0 \
-    # Cleanup
-    && rm -rf /var/lib/apt/lists/*
+    libgtk-3-0
 
-# Install Node.js 22.x
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    NODE_ENV=production
 
 WORKDIR /app
 
@@ -107,7 +100,7 @@ RUN chmod +x /app/start.sh
 RUN mkdir -p /app/backend/data
 
 # Create a non-root user for security
-RUN useradd -m -u 1000 appuser \
+RUN adduser -D appuser \
     && chown -R appuser:appuser /app
 
 USER appuser
@@ -130,3 +123,55 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 # Start the application
 CMD ["/app/start.sh"]
+
+# ============================================
+# Secrets Management
+# ============================================
+# Ensure that sensitive data is provided at runtime using Docker secrets
+# Example: Use `docker secret create` to create secrets and `--secret` flag in `docker service create`
+# The following environment variable should be set at runtime, not build time:
+# ENV NEXT_PUBLIC_API_URL=<secret_value>
+# Use Docker secrets to manage sensitive information securely.
+
+# ============================================
+# Linting Stage
+# ============================================
+# Integrate Hadolint for Dockerfile linting
+RUN apk add --no-cache hadolint
+
+# Run Hadolint to lint the Dockerfile
+RUN hadolint /Dockerfile
+
+# Ensure linting is part of the CI pipeline
+# This should be included in the CI/CD configuration to ensure compliance with best practices.
+
+# ============================================
+# Security Hardening
+# ============================================
+# Set the root filesystem to be read-only
+RUN chmod -R a-w /
+
+# Use Docker's read-only option for the container
+# This should be set in the Docker run command or Docker Compose file:
+# --read-only
+
+# Use tmpfs for non-persistent storage
+RUN mkdir -p /app/backend/data && mount -t tmpfs tmpfs /app/backend/data
+
+# Ensure that the application does not write to the root filesystem
+# Additional security measures can be added as needed.
+
+# Implement additional security measures
+# Set permissions for the application directory
+RUN chmod -R 750 /app \
+    && find /app -type d -exec chmod 750 {} \; \
+    && find /app -type f -exec chmod 640 {} \;
+
+# Add a non-root user with a specific UID and GID
+RUN adduser -D -u 1000 appuser \
+    && chown -R appuser:appuser /app
+
+USER appuser
+
+# Ensure that the application runs with the least privileges
+# Additional security measures can be added as needed.

@@ -1,14 +1,23 @@
 """Application configuration using pydantic-settings."""
 
 import json
+import os
+import re
 from pathlib import Path
 from typing import Any, Literal
-
+from cryptography.fernet import Fernet
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 # Path to config file for API key persistence
 CONFIG_FILE_PATH = Path(__file__).parent.parent / "data" / "config.json"
+
+# Encryption key for securing API keys
+ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY")
+if ENCRYPTION_KEY is None:
+    raise ValueError("ENCRYPTION_KEY environment variable must be set.")
+
+fernet = Fernet(ENCRYPTION_KEY.encode())
 
 
 def load_config_file() -> dict[str, Any]:
@@ -36,6 +45,43 @@ def save_config_file(config: dict[str, Any]) -> None:
     CONFIG_FILE_PATH.write_text(json.dumps(config, indent=2))
 
 
+def encrypt_api_keys(api_keys: dict[str, str]) -> dict[str, str]:
+    """Encrypt API keys using Fernet encryption.
+
+    Args:
+        api_keys: Dictionary with provider names as keys and API keys as values.
+
+    Returns:
+        Dictionary with encrypted API keys.
+    """
+    return {provider: fernet.encrypt(api_key.encode()).decode() for provider, api_key in api_keys.items()}
+
+
+def decrypt_api_keys(encrypted_api_keys: dict[str, str]) -> dict[str, str]:
+    """Decrypt API keys using Fernet encryption.
+
+    Args:
+        encrypted_api_keys: Dictionary with provider names as keys and encrypted API keys as values.
+
+    Returns:
+        Dictionary with decrypted API keys.
+    """
+    return {provider: fernet.decrypt(api_key.encode()).decode() for provider, api_key in encrypted_api_keys.items()}
+
+
+def validate_api_key(api_key: str) -> bool:
+    """Validate the API key format.
+
+    Args:
+        api_key: The API key to validate.
+
+    Returns:
+        True if valid, False otherwise.
+    """
+    # Example validation: length check and regex pattern
+    return bool(re.match(r'^[A-Za-z0-9_-]{32,}$', api_key)) and len(api_key) <= 64
+
+
 def get_api_keys_from_config() -> dict[str, str]:
     """Get API keys from config file.
 
@@ -43,7 +89,8 @@ def get_api_keys_from_config() -> dict[str, str]:
         Dictionary with provider names as keys and API keys as values.
     """
     config = load_config_file()
-    return config.get("api_keys", {})
+    encrypted_keys = config.get("api_keys", {})
+    return decrypt_api_keys(encrypted_keys)
 
 
 def save_api_keys_to_config(api_keys: dict[str, str]) -> None:
@@ -52,8 +99,13 @@ def save_api_keys_to_config(api_keys: dict[str, str]) -> None:
     Args:
         api_keys: Dictionary with provider names as keys and API keys as values.
     """
+    for provider, api_key in api_keys.items():
+        if not validate_api_key(api_key):
+            raise ValueError(f"Invalid API key for provider {provider}.")
+    
     config = load_config_file()
-    config["api_keys"] = api_keys
+    encrypted_keys = encrypt_api_keys(api_keys)
+    config["api_keys"] = encrypted_keys
     save_config_file(config)
 
 
@@ -84,11 +136,9 @@ def _get_llm_api_key_with_fallback() -> str:
 
     Priority: Environment variable > config.json > empty string
     """
-    import os
-
     # First check environment variable
     env_key = os.environ.get("LLM_API_KEY", "")
-    if env_key:
+    if env_key and validate_api_key(env_key):
         return env_key
 
     # Fallback to config file based on provider
@@ -155,7 +205,7 @@ class Settings(BaseSettings):
 
         Priority: Environment/settings value > config.json > empty string
         """
-        if self.llm_api_key:
+        if self.llm_api_key and validate_api_key(self.llm_api_key):
             return self.llm_api_key
         return _get_llm_api_key_with_fallback()
 
