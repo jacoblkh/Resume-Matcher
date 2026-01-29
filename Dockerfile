@@ -4,7 +4,7 @@
 # ============================================
 # Stage 1: Build Frontend
 # ============================================
-FROM node:22-slim AS frontend-builder
+FROM node:22.0.0-slim AS frontend-builder
 
 WORKDIR /app/frontend
 
@@ -26,7 +26,7 @@ RUN npm run build
 # ============================================
 # Stage 2: Final Image
 # ============================================
-FROM python:3.13-slim
+FROM python:3.13.0-slim
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
